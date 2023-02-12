@@ -1,0 +1,96 @@
+
+
+
+
+import json
+import pandas as pd
+import sqlalchemy
+import keys
+import requests
+import datetime
+def lambda_handler(event, context):
+   
+    schema="api"   # name of the database you want to use here
+    host="database-api.ctszfvfhnb1k.us-east-1.rds.amazonaws.com"        # to connect to your local server
+    user="admin"
+    password=keys.port_pass         
+    port=3306
+    con = f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}'
+
+    cities_df=pd.read_sql('cities',con=con)
+    weather_df=get_weather(cities_df)
+    weather_df.to_sql('weather',con=con,if_exists='append',index=False)
+    airports_df = pd.read_sql('airports',con=con)
+    flights_df=get_flights(airports_df)
+    flights_df.to_sql('flights',con=con,if_exists='append',index=False)
+       
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }
+def get_weather(city_df):
+
+    API_key = keys.ow_key
+    weather_dict =  {'city_id':[],'temp':[],'feels_like':[],'wind_speed':[],'forecast_time':[],'rain_prob':[],'outlook':[]}
+
+    for i, city in enumerate(city_df['city_id']):
+        url = f"http://api.openweathermap.org/data/2.5/forecast?lat={city_df.iloc[i]['lat']}&lon={city_df.iloc[i]['lon']}&appid={API_key}&units=metric"
+        response = requests.get(url)
+        weather_json = response.json()
+        for time in weather_json['list'][:8]:
+            weather_dict['city_id'].append(city)
+            weather_dict['temp'].append(time['main']['temp'])
+            weather_dict['feels_like'].append(time['main']['feels_like'])
+            weather_dict['wind_speed'].append(time['wind']['speed'])
+            weather_dict['forecast_time'].append(time['dt_txt'])
+            weather_dict['rain_prob'].append(time['pop'])
+            weather_dict['outlook'].append(time['weather'][0]['main'])
+           
+    weather_df = pd.DataFrame(weather_dict)
+    return weather_df  
+          
+          
+def get_flights(airports_df):
+    querystring = {"withLeg":"true","withCancelled":"true","withCodeshared":"true","withCargo":"true","withPrivate":"true","withLocation":"false"}
+
+    headers = {
+	    "X-RapidAPI-Key": keys.aero_key,
+	    "X-RapidAPI-Host": "aerodatabox.p.rapidapi.com"
+    }
+    today = datetime.date.today()
+    tomorrow = str(today + datetime.timedelta(days=1))
+    times = [["00:00","11:59"],["12:00","23:59"]]
+    flights_dict = {'ICAO':[],'departure_airport':[],'local_time':[]}
+    icao_list = airports_df['icao'].to_list()
+
+    for time in times:
+    
+        for icao in icao_list[:]:
+            url = f"https://aerodatabox.p.rapidapi.com/flights/airports/icao/{icao}/{tomorrow}T{time[0]}/{tomorrow}T{time[1]}"
+            response = requests.request("GET", url, headers=headers, params=querystring)
+            print(response)
+            flight_json = response.json()
+        
+            for flight in flight_json['arrivals']:
+                flights_dict['ICAO'].append(icao)
+                try:
+                    flights_dict['departure_airport'].append(flight['departure']['airport']['icao'])
+                except:
+                    flights_dict['departure_airport'].append('unknown')
+                try:
+                    flights_dict['local_time'].append(flight['arrival']['scheduledTimeLocal'])
+                except:
+                    flights_dict['local_time'].append(pd.NaT)
+    flights_df = pd.DataFrame(flights_dict)
+    
+    flights_df['local_time'] = pd.to_datetime(flights_df['local_time'])
+    
+    return flights_df          
+          
+    
+
+port_pass="Devarajan1"
+ow_key='b307fb60571f3805fce4f710d609ba0b'
+aero_key="71c3c18c6emshead11275d783168p141998jsnf815306bae85"
+
+
